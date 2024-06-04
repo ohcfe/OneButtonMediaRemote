@@ -2,5 +2,6 @@
 
 void app_main(void)
 {
+    printf("hello world\n");
 
 }
