@@ -1,7 +1,6 @@
-#include <stdio.h>
+#include <AndrewsMediaRemote.h>
 
 void app_main(void)
 {
-    printf("hello world\n");
-
+    printHelloWorld();
 }
