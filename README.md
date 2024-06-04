@@ -6,6 +6,11 @@
 A bluetooth media remote to be used with one button
 Patterns of button presses to implement audio controls.
 
+Code combines bluetooth HID stuff from
+`$IDF_PATH/examples/bluetooth/esp_hid_device`
+and the button handling approach from
+`$IDF_PATH/examples/peripherals/gpio/matrix_keyboard`
+
 
 ## Build
 [instructions from here](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/get-started/)
