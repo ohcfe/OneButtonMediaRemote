@@ -17,11 +17,13 @@ typedef struct button_t button_t;
 struct button_t{
     uint32_t pinID;
     int debounce_ms;
+    TimerHandle_t DebounceTimer;
 //    TaskHandle_t gpioTask;
 };
 
 
 static QueueHandle_t gpio_evt_queue = NULL;
+static void debounceTimerCallback(TimerHandle_t xTimer);
 static void gpioTask(void *args);
 void setupGPIO(void * args);
 static void gpio_isr_handler(void* arg);

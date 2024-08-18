@@ -1,7 +1,9 @@
+#include "FreeRTOSConfig.h"
 #include "driver/gpio.h"
 #include "freertos/projdefs.h"
 #include "hal/gpio_types.h"
 #include <AndrewsMediaRemote.h>
+//#include "portmacro.h"
 
 #define GPIO_INPUT_PIN_SEL (1ULL<<GPIO_INPUT_PIN)
 
@@ -14,17 +16,17 @@ void setupGPIO(void * args)
             (int)B->debounce_ms);
     printf("args is pointing to %p\n", args);
     //B.pinID = GPIO_INPUT_PIN;
-    /*
-    B.debounceTimerPos = xTimerCreate(
+    B->DebounceTimer = xTimerCreate(
             "debounce",
-            pdMS_TO_TICKS(B.debounce_ms),
-            pdFALSE, &B, debounceTimerPosCallback);
+            pdMS_TO_TICKS(B->debounce_ms),
+            pdFALSE, B, debounceTimerCallback);
+    /*
     B.debounceTimerNeg = xTimerCreate(
             "debounce",
             pdMS_TO_TICKS(B.debounce_ms),
             pdFALSE, &B, debounceTimerNegCallback);
             */
-    gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
+    gpio_evt_queue = xQueueCreate(16, sizeof(uint32_t));
     gpio_config_t ioConf = {};
     ioConf.intr_type = GPIO_INTR_NEGEDGE;
     ioConf.pin_bit_mask = GPIO_INPUT_PIN_SEL;
@@ -32,7 +34,7 @@ void setupGPIO(void * args)
     ioConf.pull_up_en = 0;
     ioConf.pull_down_en = 1;
     gpio_config(&ioConf);
-    xTaskCreate(gpioTask, "gpioTask", 2048, args, 10, NULL);
+    xTaskCreate(gpioTask, "gpioTask", 2048, args, configMAX_PRIORITIES - 5, NULL);
     gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
     gpio_isr_handler_add(
             GPIO_INPUT_PIN, gpio_isr_handler, (void*) B->pinID);
@@ -46,6 +48,14 @@ static void IRAM_ATTR gpio_isr_handler(void* arg)
 {
     uint32_t gpio_num = (uint32_t) arg;
     xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL);
+}
+
+//timer callback
+static void debounceTimerCallback(TimerHandle_t xTimer){
+    //printf("In debounceTimerCallback!\n");
+    // turn the interrupt back on
+    gpio_isr_handler_add(
+            GPIO_INPUT_PIN, gpio_isr_handler, (void*) GPIO_INPUT_PIN);
 }
 
 //Handler for GPIO interrupts
@@ -64,31 +74,15 @@ static void gpioTask(void * args)
     int inPin = B->pinID;
     int pressCount = 0;
     int pushTicks = 0;
-
-    char *string_ptr = (char *)&B;
-    int kk = sizeof(button_t);
-    while(kk--){
-        printf(" %hhx ", *string_ptr++);
-    }
+    TimerHandle_t dbt = B->DebounceTimer;
+    BaseType_t debounceStarted;
     printf("\n");
     for (;;) {
         if (xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
+            gpio_isr_handler_remove(inPin);
             level = gpio_get_level(inPin);
             ticks = xTaskGetTickCountFromISR();
-            //printf("in gpioTask, inside queue\n");
-            /*
-            printf("    B->pinID = %d\n", (int)B->pinID);
-            printf("    B->debounceTicks = %d\n", (int)B->debounceTicks);
-            printf("    B->lastPressTime = %d\n", (int)B->LastPressTime);
-            printf("    B->lastReleaseTime = %d\n", (int)B->LastReleaseTime);
-            printf("    B = %p\n", B);
-            string_ptr = (char *)&B;
-            kk = sizeof(button_t);
-            while(kk--){
-                printf(" %hhx ", *string_ptr++);
-            }
-            printf("\n");
-            */
+            debounceStarted = xTimerStart(dbt, 5);
             if(level == 1){
                 //gpio_set_level(LED_GPIO, 1);
                 /*
@@ -123,7 +117,8 @@ static void gpioTask(void * args)
                     //printf("Time went through max\n");
                     lastReleasedTick = ticks;
                 }
-                else if (ticks -lastPressedTick  < debounceTicks || ticks - lastReleasedTick  < debounceTicks){
+                else if (ticks -lastPressedTick  < debounceTicks ||
+                        ticks - lastReleasedTick  < debounceTicks){
                     //printf("Bounce 0!\n");
                 }
                 else{
@@ -131,11 +126,11 @@ static void gpioTask(void * args)
                     //printf("Button was pressed for %d ticks\n", (int)(ticks - lastPressedTick));
                    // printf("ticks - lastPressedTick = %d ", (int)(ticks - lastPressedTick));
                     if (ticks - lastPressedTick > 100){
-                        //printf("-\n");
+                        printf("-\n");
                         gpio_set_level(LED_GPIO, 0);
                     }else{
                         gpio_set_level(LED_GPIO, 1);
-                        //printf(".\n");
+                        printf(".\n");
                     }
                     pushTicks = ticks - lastPressedTick;
                     lastReleasedTick = ticks;
