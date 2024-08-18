@@ -9,15 +9,14 @@
 #include "portmacro.h"
 
 #define GPIO_INPUT_PIN 23
+#define LED_GPIO 2
 #define ESP_INTR_FLAG_DEFAULT 0
+
 
 typedef struct button_t button_t;
 struct button_t{
     uint32_t pinID;
     int debounce_ms;
-    TickType_t debounceTicks;
-    TickType_t LastPressTime;
-    TickType_t LastReleaseTime;
 //    TaskHandle_t gpioTask;
 };
 
