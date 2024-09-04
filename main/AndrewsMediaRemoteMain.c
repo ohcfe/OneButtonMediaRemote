@@ -1,10 +1,11 @@
 #include <AndrewsMediaRemote.h>
 
+button_t button;
 void app_main(void)
 {
-    button_t button;
     button.pinID = GPIO_INPUT_PIN;
     button.debounce_ms = 20;
+    button.long_press_ms = 200;
     int level;
     printf("The pin is %d\n", GPIO_INPUT_PIN);
     printf("The address of button is: %p\n", &button);

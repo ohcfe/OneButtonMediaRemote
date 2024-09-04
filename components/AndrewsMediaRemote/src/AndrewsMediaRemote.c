@@ -2,42 +2,74 @@
 #include "driver/gpio.h"
 #include "freertos/projdefs.h"
 #include "hal/gpio_types.h"
+#include "portmacro.h"
 #include <AndrewsMediaRemote.h>
 //#include "portmacro.h"
 
 #define GPIO_INPUT_PIN_SEL (1ULL<<GPIO_INPUT_PIN)
 
-void setupGPIO(void * args)
-{
+
+void setupGPIO(void * args){
     button_t *B = (button_t *)args;
-    printf("in setupGPIO: GPIO_INPUT_PIN=%d, B->pinID=%d, debounce_ms = %d\n",
+    B->lastTicks = xTaskGetTickCountFromISR();
+    //B->longPressTicks = pdMS_TO_TICKS(B->longPressTicks);
+    B->longPressTicks = pdMS_TO_TICKS(B->long_press_ms);
+    /*
+    printf("in setupGPIO: GPIO_INPUT_PIN=%d, B->pinID=%d, debounce_ms = %d, longPressMS = %d, longPressTicks = %d\n",
             (int)GPIO_INPUT_PIN,
             (int)B->pinID,
-            (int)B->debounce_ms);
+            (int)B->debounce_ms,
+            (int)B->long_press_ms,
+            (int)B->longPressTicks);
     printf("args is pointing to %p\n", args);
+    */
     //B.pinID = GPIO_INPUT_PIN;
     B->DebounceTimer = xTimerCreate(
             "debounce",
             pdMS_TO_TICKS(B->debounce_ms),
             pdFALSE, B, debounceTimerCallback);
+    //vTimerSetTimerID(B->DebounceTimer, args);
+    /*
+    B->PressTimer = xTimerCreate(
+            "longPress",
+            pdMS_TO_TICKS(B->long_press_ms),
+            pdFALSE, &B, pressTimerCallback);
+            */
     /*
     B.debounceTimerNeg = xTimerCreate(
             "debounce",
             pdMS_TO_TICKS(B.debounce_ms),
             pdFALSE, &B, debounceTimerNegCallback);
             */
-    gpio_evt_queue = xQueueCreate(16, sizeof(uint32_t));
+    gpio_evt_queue = xQueueCreate(8, sizeof(uint32_t));
+    if (gpio_evt_queue == NULL){
+        printf("ERROR: xQueueCreate failed!");
+    }
+    //gpio_evt_queue = xQueueCreate(8, sizeof(struct button_t *));
+    //gpio_evt_queue = xQueueCreate(8, sizeof(struct button_t));
     gpio_config_t ioConf = {};
-    ioConf.intr_type = GPIO_INTR_NEGEDGE;
+    ioConf.intr_type = GPIO_INTR_ANYEDGE;
     ioConf.pin_bit_mask = GPIO_INPUT_PIN_SEL;
     ioConf.mode = GPIO_MODE_INPUT;
     ioConf.pull_up_en = 0;
     ioConf.pull_down_en = 1;
     gpio_config(&ioConf);
-    xTaskCreate(gpioTask, "gpioTask", 2048, args, configMAX_PRIORITIES - 5, NULL);
-    gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
-    gpio_isr_handler_add(
-            GPIO_INPUT_PIN, gpio_isr_handler, (void*) B->pinID);
+    if (xTaskCreate(
+            gpioTask,
+            "gpioTask",
+            2048,
+            B,
+            10, //configMAX_PRIORITIES - 5,
+            NULL) != pdPASS) {
+        printf("Failed to create task!");}
+    if(gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT) != ESP_OK){
+        printf("ERROR: gpio_install_isr_service failed!\n");
+    }
+    if(gpio_isr_handler_add(
+            GPIO_INPUT_PIN, gpio_isr_handler, (void*) B->pinID) != ESP_OK){
+        printf("ERROR: hpio_isr_handler_add failed!\n");
+    }
+        
     // LED setup
     gpio_reset_pin(LED_GPIO);
     /* Set the GPIO as a push/pull output */
@@ -51,9 +83,41 @@ static void IRAM_ATTR gpio_isr_handler(void* arg)
 }
 
 //timer callback
+/*
+static void pressTimerCallback(TimerHandle_t xTimer){
+}
+*/
 static void debounceTimerCallback(TimerHandle_t xTimer){
     //printf("In debounceTimerCallback!\n");
     // turn the interrupt back on
+    button_t *B = (button_t *)pvTimerGetTimerID( xTimer );
+    /*
+    printf("in debounce timer\n");
+    printf("B->pinID = %d\n",(int) (B->pinID));
+    printf("B->debounce_ms = %d\n", (int)(B->debounce_ms));
+    printf("B->long_press_ms = %d\n", (int)(B->long_press_ms));
+    printf("B->longPressTicks = %d\n", (int)(B->longPressTicks));
+    */
+    int level = gpio_get_level(GPIO_INPUT_PIN);
+    TickType_t nowTicks;
+    nowTicks = xTaskGetTickCountFromISR();
+    if(level == 1){
+        //pressStarted = xTimerStart(B->PressTimer, 5);
+        printf("level high, was released for %d ticks\n", (int)(nowTicks - B->lastTicks));
+    }else if (level == 0) {
+        printf("level low, was pressed for %d ticks", (int)(nowTicks - B->lastTicks));
+        if (B->longPressTicks <= nowTicks - B->lastTicks) {
+            printf(" LONG PRESS\n");
+            gpio_set_level(LED_GPIO, 1);
+        }
+        else{
+            printf(" SHORT PRESS\n");
+            gpio_set_level(LED_GPIO, 0);
+        }
+    }else{
+        printf("Something is strange!\n");
+    }
+    B->lastTicks = nowTicks;
     gpio_isr_handler_add(
             GPIO_INPUT_PIN, gpio_isr_handler, (void*) GPIO_INPUT_PIN);
 }
@@ -62,129 +126,14 @@ static void debounceTimerCallback(TimerHandle_t xTimer){
 static void gpioTask(void * args)
 {
     button_t *B = (button_t *)args;
-    printf("in gpioTask, outside of queue\n");
-    printf("    B->pinID = %d\n", (int)B->pinID);
-    printf("    B = %p\n", B);
     uint32_t io_num;
-    TickType_t ticks;
-    int debounceTicks = pdMS_TO_TICKS(B->debounce_ms);
-    int lastPressedTick = 0;
-    int lastReleasedTick = 0;
-    int level;
     int inPin = B->pinID;
-    int pressCount = 0;
-    int pushTicks = 0;
     TimerHandle_t dbt = B->DebounceTimer;
     BaseType_t debounceStarted;
-    printf("\n");
     for (;;) {
         if (xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
             gpio_isr_handler_remove(inPin);
-            level = gpio_get_level(inPin);
-            ticks = xTaskGetTickCountFromISR();
             debounceStarted = xTimerStart(dbt, 5);
-            if(level == 1){
-                //gpio_set_level(LED_GPIO, 1);
-                /*
-                if (lastPressedTick == 0){
-                    //printf("First press at %d\n", (int)ticks);
-                    lastPressedTick = ticks;
-                }
-                else */
-                if (ticks < lastPressedTick ){
-                    //printf("Time went through max\n");
-                    lastPressedTick = ticks;
-                }
-                else if (ticks -lastPressedTick  < debounceTicks || ticks - lastReleasedTick  < debounceTicks){
-                    //printf("Bounce 1!\n");
-                }
-                else{
-                    //pressCount++;
-                    //printf("Button pressed at %d, pressCount=%d\n", (int)ticks, pressCount);
-                    //printf("Button was released for %d ticks\n", (int)(ticks - lastReleasedTick));
-                    lastPressedTick = ticks;
-                }
-            }
-            else if(level == 0){
-                //gpio_set_level(LED_GPIO, 0);
-                /*
-                if (lastReleasedTick == 0){
-                    //printf("First released at %d\n", (int)ticks);
-                    lastReleasedTick = ticks;
-                }
-                else*/
-                if (ticks < lastReleasedTick){
-                    //printf("Time went through max\n");
-                    lastReleasedTick = ticks;
-                }
-                else if (ticks -lastPressedTick  < debounceTicks ||
-                        ticks - lastReleasedTick  < debounceTicks){
-                    //printf("Bounce 0!\n");
-                }
-                else{
-                    //printf("Button released at %d\n", (int)ticks);
-                    //printf("Button was pressed for %d ticks\n", (int)(ticks - lastPressedTick));
-                   // printf("ticks - lastPressedTick = %d ", (int)(ticks - lastPressedTick));
-                    if (ticks - lastPressedTick > 100){
-                        printf("-\n");
-                        gpio_set_level(LED_GPIO, 0);
-                    }else{
-                        gpio_set_level(LED_GPIO, 1);
-                        printf(".\n");
-                    }
-                    pushTicks = ticks - lastPressedTick;
-                    lastReleasedTick = ticks;
-                }
-            }
-            else{
-                printf("Shouldn't be here, level was %d\n", level);
-            }
         }
     }
 }
-//Handler for rising edge interrupt
-/*
-static void gpioTaskPos(void *args)
-{
-    button_t *B = (button_t *)args;
-    BaseType_t high_task_wakeup = pdFALSE;
-    printf("Inside gpioTaskPos!\n");
-    uint32_t io_num;
-    for (;;) {
-    if (xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
-        printf("GPIOpos[%d] intr, val: %d\n", (int)io_num, gpio_get_level(io_num));
-        vTaskDelete(B->gpioTask);
-        xTaskCreate(gpioTaskNeg, "gpioTaskNeg", 2048, &B, 10, &(B->gpioTask));
-        gpio_set_intr_type (B->pinID, GPIO_INTR_NEGEDGE);
-        //xTimerStartFromISR(B->debounceTimerPos, &high_task_wakeup);
-    }
-    }
-}
-
-//handler for falling edge interrupt
-static void gpioTaskNeg(void *args)
-{
-    button_t *B = (button_t *)args;
-    BaseType_t high_task_wakeup = pdFALSE;
-    printf("Inside GPIO gpioTaskNeg!\n");
-    uint32_t io_num;
-    for (;;) {
-    if (xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
-        printf("GPIOneg[%d] intr, val: %d\n", (int)io_num, gpio_get_level(io_num));
-        vTaskDelete(B->gpioTask);
-        xTaskCreate(gpioTaskPos, "gpioTaskPos", 2048, &B, 10, &(B->gpioTask));
-        gpio_set_intr_type (B->pinID, GPIO_INTR_POSEDGE);
-        //xTimerStartFromISR(B->debounceTimerNeg, &high_task_wakeup);
-    }
-    }
-}
-static void debounceTimerPosCallback(TimerHandle_t xTimer)
-{
-    printf("Debounce Timer Rising Edge Callback!\n");
-}
-
-static void debounceTimerNegCallback(TimerHandle_t xTimer)
-{
-    printf("Debounce Timer Falling Edge Callback!\n");
-}
-*/

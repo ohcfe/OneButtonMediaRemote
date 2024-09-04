@@ -13,19 +13,24 @@
 #define ESP_INTR_FLAG_DEFAULT 0
 
 
-typedef struct button_t button_t;
 struct button_t{
     uint32_t pinID;
     int debounce_ms;
+    int long_press_ms;
+    TickType_t longPressTicks;
+    TickType_t lastTicks;
     TimerHandle_t DebounceTimer;
-//    TaskHandle_t gpioTask;
+//    TimerHandle_t PressTimer;
+    TaskHandle_t gpioTask;
 };
-
+typedef struct button_t button_t;
 
 static QueueHandle_t gpio_evt_queue = NULL;
 static void debounceTimerCallback(TimerHandle_t xTimer);
+static void pressTimerCallback(TimerHandle_t xTimer);
 static void gpioTask(void *args);
 void setupGPIO(void * args);
+void setupBluetooth(void * args);
 static void gpio_isr_handler(void* arg);
 
 typedef struct button_t *button_handle_t;
